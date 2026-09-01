@@ -186,3 +186,59 @@ export async function bookSlot(
     },
   });
 }
+
+/**
+ * Returns a student's active booking if they have one, or null.
+ * Matches Student Number case-insensitively.
+ */
+export async function getStudentBooking(
+  studentNumber: string
+): Promise<BookedSlot | null> {
+  const cleanNum = studentNumber.trim().toLowerCase();
+  if (!cleanNum) return null;
+
+  const rows = await getAllRows();
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    const status = (row[COL.STATUS] ?? "").trim();
+    const stuNum = (row[COL.STUDENT_NUMBER] ?? "").trim().toLowerCase();
+
+    if (status === "Booked" && stuNum === cleanNum) {
+      return {
+        date: (row[COL.DATE] ?? "").trim(),
+        time: (row[COL.TIME] ?? "").trim(),
+        studentNumber: (row[COL.STUDENT_NUMBER] ?? "").trim(),
+        studentEmail: (row[COL.STUDENT_EMAIL] ?? "").trim(),
+        rowIndex: i + 1,
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Cancels a student's active booking by setting Status back to "Available"
+ * and clearing Student Number & Student Email columns.
+ * Returns the cancelled BookedSlot details so email notifications can be sent.
+ */
+export async function cancelSlot(
+  studentNumber: string
+): Promise<BookedSlot> {
+  const booking = await getStudentBooking(studentNumber);
+  if (!booking) {
+    throw new Error(`No active booking found for student number "${studentNumber}".`);
+  }
+
+  const sheets = getSheetsClient();
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SPREADSHEET_ID,
+    range: rowRange(booking.rowIndex),
+    valueInputOption: "RAW",
+    requestBody: {
+      values: [[booking.date, booking.time, "Available", "", ""]],
+    },
+  });
+
+  return booking;
+}

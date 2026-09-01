@@ -4,16 +4,19 @@ import { motion } from "framer-motion";
 import { Clock } from "lucide-react";
 
 interface SlotCardProps {
+  date?: string;
   time: string;
-  onClick: () => void;
+  onClick?: () => void;
+  onSelect?: () => void;
   disabled?: boolean;
 }
 
-export default function SlotCard({ time, onClick, disabled = false }: SlotCardProps) {
+export default function SlotCard({ time, onClick, onSelect, disabled = false }: SlotCardProps) {
+  const handleClick = onSelect || onClick || (() => {});
   return (
     <motion.button
       id={`slot-${time.replace(/[\s:]/g, "-")}`}
-      onClick={onClick}
+      onClick={handleClick}
       disabled={disabled}
       whileHover={disabled ? {} : { y: -3, scale: 1.02 }}
       whileTap={disabled ? {} : { scale: 0.97 }}

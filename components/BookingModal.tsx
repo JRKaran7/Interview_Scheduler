@@ -12,6 +12,7 @@ interface Slot {
 
 interface BookingModalProps {
   slot: Slot | null;
+  initialStudentNumber?: string;
   onClose: () => void;
   onBooked: () => void; // called to trigger slot list refresh
 }
@@ -24,8 +25,8 @@ interface FormErrors {
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export default function BookingModal({ slot, onClose, onBooked }: BookingModalProps) {
-  const [studentNumber, setStudentNumber] = useState("");
+export default function BookingModal({ slot, initialStudentNumber = "", onClose, onBooked }: BookingModalProps) {
+  const [studentNumber, setStudentNumber] = useState(initialStudentNumber);
   const [studentEmail, setStudentEmail] = useState("");
   const [errors, setErrors] = useState<FormErrors>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -33,12 +34,12 @@ export default function BookingModal({ slot, onClose, onBooked }: BookingModalPr
 
   // Reset state whenever a new slot is selected
   useEffect(() => {
-    setStudentNumber("");
+    setStudentNumber(initialStudentNumber);
     setStudentEmail("");
     setErrors({});
     setIsSubmitting(false);
     setBooked(false);
-  }, [slot]);
+  }, [slot, initialStudentNumber]);
 
   // Close on Escape key
   useEffect(() => {

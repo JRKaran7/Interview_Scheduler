@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { bookSlot, SlotAlreadyBookedError } from "@/lib/googleSheets";
+import { bookSlot, getStudentBooking, SlotAlreadyBookedError } from "@/lib/googleSheets";
 import { sendBookingConfirmationEmail } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
@@ -60,6 +60,24 @@ export async function POST(req: NextRequest) {
       { success: false, message: "Validation failed.", errors },
       { status: 422 }
     );
+  }
+
+  // ── Check if student already has an active booking ──
+  try {
+    const existingBooking = await getStudentBooking(cleanStudentNumber);
+    if (existingBooking) {
+      return NextResponse.json(
+        {
+          success: false,
+          code: "ALREADY_BOOKED",
+          message: `Student number "${cleanStudentNumber}" already has an active interview booking on ${existingBooking.date} at ${existingBooking.time}. Please cancel your existing booking before selecting a new time slot.`,
+          existingBooking,
+        },
+        { status: 400 }
+      );
+    }
+  } catch (err) {
+    console.error("[POST /api/slots/book] Check existing booking error:", err);
   }
 
   // ── Book the slot ──

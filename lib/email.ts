@@ -180,6 +180,75 @@ export async function sendBookingConfirmationEmail(
   };
 }
 
+export async function sendCancellationEmail(
+  studentEmail: string,
+  studentNumber: string,
+  date: string,
+  time: string
+): Promise<SendReminderResult> {
+  const result = await sendHtmlEmail(
+    studentEmail,
+    `Interview Booking Cancelled: ${date} at ${time}`,
+    buildCancellationHtml(studentEmail, studentNumber, date, time)
+  );
+
+  return {
+    success: result.success,
+    email: studentEmail,
+    error: result.error,
+  };
+}
+
+function buildCancellationHtml(
+  studentEmail: string,
+  studentNumber: string,
+  date: string,
+  time: string
+): string {
+  return `<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <title>Booking Cancelled</title>
+</head>
+<body style="margin:0;padding:0;background-color:#0d0f14;font-family:Arial,Helvetica,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0d0f14;padding:40px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;width:100%;background-color:#1a1f2e;border-radius:16px;border:1px solid rgba(148,163,184,0.12);overflow:hidden;">
+          <tr>
+            <td style="background:linear-gradient(135deg,#ef4444 0%,#f97316 100%);padding:32px 40px;text-align:center;">
+              <p style="margin:0;font-size:13px;font-weight:600;color:rgba(255,255,255,0.8);letter-spacing:0.1em;text-transform:uppercase;">Interview Scheduler</p>
+              <h1 style="margin:12px 0 0;font-size:28px;font-weight:700;color:#ffffff;line-height:1.2;">Booking Cancelled</h1>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:36px 40px;">
+              <p style="margin:0 0 16px;font-size:15px;color:#94a3b8;line-height:1.7;">Hi Student (${studentNumber}),</p>
+              <p style="margin:0 0 28px;font-size:15px;color:#e2e8f0;line-height:1.7;">
+                Your interview reservation has been successfully cancelled and reopened for other students:
+              </p>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#13161e;border-radius:12px;border:1px solid rgba(148,163,184,0.10);margin-bottom:28px;">
+                <tr>
+                  <td style="padding:24px 28px;">
+                    <p style="margin:0 0 8px;font-size:11px;font-weight:600;color:#f87171;letter-spacing:0.08em;text-transform:uppercase;">Released Slot</p>
+                    <p style="margin:0;font-size:17px;font-weight:700;color:#f1f5f9;">${date} &bull; ${time}</p>
+                  </td>
+                </tr>
+              </table>
+              <p style="margin:0;font-size:14px;color:#64748b;line-height:1.6;">If this was a mistake, you can log back into the portal at any time to choose a new slot.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
 // ─── HTML Templates ──────────────────────────────────────────────────────────
 
 function buildReminderHtml(

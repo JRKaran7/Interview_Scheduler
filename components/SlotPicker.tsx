@@ -2,9 +2,14 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { RefreshCw, AlertCircle, Calendar, Inbox } from "lucide-react";
-import SlotCard from "./SlotCard";
+import { RefreshCw, AlertCircle, Inbox, Lock } from "lucide-react";
 import BookingModal from "./BookingModal";
+import StudentSessionBar from "./StudentSessionBar";
+import ActiveBookingBanner from "./ActiveBookingBanner";
+import CancelConfirmModal from "./CancelConfirmModal";
+import LoginHero from "./LoginHero";
+import CalendarView from "./CalendarView";
+import { BookedSlot } from "@/lib/googleSheets";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -14,70 +19,20 @@ interface Slot {
   rowIndex: number;
 }
 
-type GroupedSlots = Record<string, Slot[]>;
-
-// ─── Helpers ───────────────────────────────────────────────────────────────
-
-function groupByDate(slots: Slot[]): GroupedSlots {
-  return slots.reduce<GroupedSlots>((acc, slot) => {
-    if (!acc[slot.date]) acc[slot.date] = [];
-    acc[slot.date].push(slot);
-    return acc;
-  }, {});
-}
-
-function parseDDMMYYYY(dateStr: string): Date | null {
-  const parts = dateStr.split("/");
-  if (parts.length === 3) {
-    const day = parseInt(parts[0], 10);
-    const month = parseInt(parts[1], 10) - 1;
-    const year = parseInt(parts[2], 10);
-    if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
-      return new Date(year, month, day);
-    }
-  }
-  const fallback = new Date(dateStr);
-  return isNaN(fallback.getTime()) ? null : fallback;
-}
-
-function formatDateHeader(dateStr: string): string {
-  const parsed = parseDDMMYYYY(dateStr);
-  if (parsed) {
-    return parsed.toLocaleDateString("en-US", {
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    });
-  }
-  return dateStr;
-}
-
-// ─── Loading skeleton ──────────────────────────────────────────────────────
-
-function SkeletonCard() {
-  return (
-    <div
-      className="shimmer rounded-xl h-[76px]"
-      style={{ border: "1px solid var(--border)" }}
-      aria-hidden="true"
-    />
-  );
-}
+// ─── Loading Skeleton ──────────────────────────────────────────────────────
 
 function LoadingSkeleton() {
   return (
-    <div className="space-y-8" aria-label="Loading slots…" role="status">
-      {[0, 1].map((g) => (
-        <div key={g}>
-          <div className="shimmer h-5 w-48 rounded-lg mb-4" />
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {[0, 1, 2, 3].map((i) => (
-              <SkeletonCard key={i} />
-            ))}
-          </div>
+    <div className="space-y-6" aria-label="Loading slots…" role="status">
+      <div className="shimmer h-16 w-full rounded-2xl mb-4" />
+      <div className="glass-card rounded-3xl p-8 border border-white/10 space-y-4">
+        <div className="shimmer h-6 w-48 rounded-lg mb-6" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {[0, 1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className="shimmer h-20 rounded-xl" />
+          ))}
         </div>
-      ))}
+      </div>
     </div>
   );
 }
@@ -85,6 +40,7 @@ function LoadingSkeleton() {
 // ─── Main Component ────────────────────────────────────────────────────────
 
 const POLL_INTERVAL_MS = 30_000; // refresh every 30 s
+const SESSION_STORAGE_KEY = "student_id_session";
 
 export default function SlotPicker() {
   const [slots, setSlots] = useState<Slot[]>([]);
@@ -92,6 +48,52 @@ export default function SlotPicker() {
   const [error, setError] = useState<string | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  // Student Session & Booking state
+  const [studentNumber, setStudentNumber] = useState<string>("");
+  const [activeBooking, setActiveBooking] = useState<BookedSlot | null>(null);
+  const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
+
+  // Restore session from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (saved) setStudentNumber(saved);
+  }, []);
+
+  // Fetch student's existing booking whenever studentNumber changes
+  const checkStudentBooking = useCallback(async (stuNum: string) => {
+    if (!stuNum.trim()) {
+      setActiveBooking(null);
+      return;
+    }
+    try {
+      const res = await fetch(
+        `/api/student/booking?studentNumber=${encodeURIComponent(stuNum.trim())}`,
+        { cache: "no-store" }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setActiveBooking(data.booking ?? null);
+      }
+    } catch (err) {
+      console.error("Failed to check student booking:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (studentNumber) checkStudentBooking(studentNumber);
+  }, [studentNumber, checkStudentBooking]);
+
+  const handleLogin = (id: string) => {
+    setStudentNumber(id);
+    localStorage.setItem(SESSION_STORAGE_KEY, id);
+  };
+
+  const handleLogout = () => {
+    setStudentNumber("");
+    setActiveBooking(null);
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+  };
 
   const fetchSlots = useCallback(async (showLoading = false) => {
     if (showLoading) setIsLoading(true);
@@ -118,20 +120,65 @@ export default function SlotPicker() {
 
   // Polling every 30 s
   useEffect(() => {
-    const interval = setInterval(() => fetchSlots(false), POLL_INTERVAL_MS);
+    const interval = setInterval(() => {
+      fetchSlots(false);
+      if (studentNumber) checkStudentBooking(studentNumber);
+    }, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [fetchSlots]);
+  }, [fetchSlots, studentNumber, checkStudentBooking]);
 
-  const grouped = groupByDate(slots);
-  const dateKeys = Object.keys(grouped).sort((a, b) => {
-    const da = parseDDMMYYYY(a)?.getTime() ?? 0;
-    const db = parseDDMMYYYY(b)?.getTime() ?? 0;
-    return da - db;
-  });
+  const handleCancelBooking = async () => {
+    if (!studentNumber) return;
+    const res = await fetch("/api/slots/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ studentNumber }),
+    });
 
+    if (!res.ok) {
+      const data = await res.json();
+      throw new Error(data.message || "Could not cancel booking.");
+    }
+
+    setActiveBooking(null);
+    fetchSlots(false);
+  };
+
+  // ── Step 1: Login Gate (If not logged in, show Login Hero) ──
+  if (!studentNumber) {
+    return <LoginHero onLogin={handleLogin} />;
+  }
+
+  // ── Step 2: Logged In Portal ──
   return (
     <>
-      {/* Live indicator + refresh */}
+      {/* Student Session Bar */}
+      <StudentSessionBar
+        studentNumber={studentNumber}
+        onLogin={handleLogin}
+        onLogout={handleLogout}
+        hasActiveBooking={activeBooking !== null}
+      />
+
+      {/* Active Booking Banner */}
+      {activeBooking && (
+        <ActiveBookingBanner
+          booking={activeBooking}
+          onCancelClick={() => setIsCancelModalOpen(true)}
+        />
+      )}
+
+      {/* Cancel Confirmation Modal */}
+      {activeBooking && (
+        <CancelConfirmModal
+          isOpen={isCancelModalOpen}
+          onClose={() => setIsCancelModalOpen(false)}
+          booking={activeBooking}
+          onConfirmCancel={handleCancelBooking}
+        />
+      )}
+
+      {/* Live availability bar */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-2">
           <span className="pulse-dot" aria-hidden="true" />
@@ -144,150 +191,102 @@ export default function SlotPicker() {
             </span>
           )}
         </div>
+
         <button
-          onClick={() => fetchSlots(true)}
-          disabled={isLoading}
-          className="btn-ghost"
-          aria-label="Refresh slot availability"
+          onClick={() => fetchSlots(false)}
+          className="btn-ghost text-xs flex items-center gap-1.5 px-3 py-1.5"
+          aria-label="Refresh availability"
           id="refresh-slots-btn"
         >
-          <RefreshCw
-            size={13}
-            className={isLoading ? "animate-spin" : ""}
-            aria-hidden="true"
-          />
-          Refresh
+          <RefreshCw size={13} className={isLoading ? "animate-spin" : ""} aria-hidden="true" />
+          <span>Refresh</span>
         </button>
       </div>
 
-      {/* Content */}
-      {isLoading ? (
-        <LoadingSkeleton />
-      ) : error ? (
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          role="alert"
-          className="rounded-xl p-6 flex flex-col items-center text-center gap-3"
+      {/* Single Booking Restriction Notice */}
+      {activeBooking && (
+        <div className="p-4 rounded-2xl border border-amber-500/30 bg-amber-500/10 text-amber-300 text-sm flex items-center gap-3 mb-6">
+          <Lock className="w-5 h-5 flex-shrink-0 text-amber-400" />
+          <span>
+            You already have a confirmed interview on <strong>{activeBooking.date}</strong> at <strong>{activeBooking.time}</strong>. If you want to change your date or time, please cancel your active booking above first.
+          </span>
+        </div>
+      )}
+
+      {/* Loading state */}
+      {isLoading && slots.length === 0 && <LoadingSkeleton />}
+
+      {/* Error state */}
+      {error && slots.length === 0 && (
+        <div
+          className="rounded-2xl p-8 text-center"
           style={{
             background: "rgba(248,113,113,0.06)",
             border: "1px solid rgba(248,113,113,0.2)",
           }}
+          role="alert"
         >
-          <AlertCircle size={32} style={{ color: "#f87171" }} aria-hidden="true" />
-          <p className="font-semibold" style={{ color: "#fca5a5" }}>
-            Failed to load slots
-          </p>
-          <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+          <AlertCircle
+            size={36}
+            className="mx-auto mb-3"
+            style={{ color: "#f87171" }}
+            aria-hidden="true"
+          />
+          <h3 className="font-semibold text-base mb-1" style={{ color: "var(--text-primary)" }}>
+            Failed to Load Slots
+          </h3>
+          <p className="text-sm mb-5" style={{ color: "var(--text-secondary)" }}>
             {error}
           </p>
           <button
             onClick={() => fetchSlots(true)}
-            className="btn-ghost mt-1"
-            id="retry-fetch-btn"
+            className="btn-primary inline-flex items-center gap-2"
           >
-            Try again
+            <RefreshCw size={14} aria-hidden="true" />
+            Try Again
           </button>
-        </motion.div>
-      ) : dateKeys.length === 0 ? (
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="rounded-xl p-10 flex flex-col items-center text-center gap-3"
-          style={{
-            background: "var(--bg-card)",
-            border: "1px solid var(--border)",
-          }}
-        >
-          <Inbox size={40} style={{ color: "var(--text-muted)" }} aria-hidden="true" />
-          <p className="font-semibold" style={{ color: "var(--text-secondary)" }}>
-            No slots available right now
-          </p>
-          <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-            Check back later — new slots may open up.
-          </p>
-        </motion.div>
-      ) : (
-        <AnimatePresence mode="popLayout">
-          <div className="space-y-8">
-            {dateKeys.map((date, groupIdx) => (
-              <motion.section
-                key={date}
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ delay: groupIdx * 0.06 }}
-                aria-labelledby={`date-header-${date}`}
-              >
-                {/* Date header */}
-                <div className="flex items-center gap-3 mb-4">
-                  <div
-                    className="p-1.5 rounded-lg"
-                    style={{ background: "rgba(99,102,241,0.12)" }}
-                  >
-                    <Calendar
-                      size={14}
-                      style={{ color: "var(--brand-400)" }}
-                      aria-hidden="true"
-                    />
-                  </div>
-                  <h2
-                    id={`date-header-${date}`}
-                    className="font-semibold text-sm"
-                    style={{ color: "var(--text-secondary)" }}
-                  >
-                    {formatDateHeader(date)}
-                  </h2>
-                  <span
-                    className="ml-auto text-xs px-2 py-0.5 rounded-full"
-                    style={{
-                      background: "var(--bg-elevated)",
-                      color: "var(--text-muted)",
-                      border: "1px solid var(--border)",
-                    }}
-                  >
-                    {grouped[date].length} slot{grouped[date].length !== 1 ? "s" : ""}
-                  </span>
-                </div>
-
-                {/* Slot grid */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {grouped[date].map((slot, slotIdx) => (
-                    <motion.div
-                      key={`${slot.date}-${slot.time}`}
-                      initial={{ opacity: 0, scale: 0.95 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      transition={{ delay: groupIdx * 0.06 + slotIdx * 0.04 }}
-                    >
-                      <SlotCard
-                        time={slot.time}
-                        onClick={() => setSelectedSlot(slot)}
-                      />
-                    </motion.div>
-                  ))}
-                </div>
-              </motion.section>
-            ))}
-          </div>
-        </AnimatePresence>
+        </div>
       )}
 
-      {/* Booking modal */}
+      {/* Empty state */}
+      {!isLoading && !error && slots.length === 0 && (
+        <div
+          className="glass-card rounded-2xl p-12 text-center"
+          style={{ border: "1px solid var(--border)" }}
+        >
+          <div
+            className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center"
+            style={{ background: "rgba(99,102,241,0.1)", color: "var(--brand-400)" }}
+          >
+            <Inbox size={32} aria-hidden="true" />
+          </div>
+          <h3 className="font-bold text-lg mb-2" style={{ color: "var(--text-primary)" }}>
+            No Slots Available
+          </h3>
+          <p className="text-sm max-w-sm mx-auto" style={{ color: "var(--text-secondary)" }}>
+            All interview slots are currently booked. Please check back later or contact your coordinator.
+          </p>
+        </div>
+      )}
+
+      {/* Calendar Slot View (Shown when student has NO active booking) */}
+      {!isLoading && slots.length > 0 && !activeBooking && (
+        <CalendarView
+          slots={slots}
+          onSelectSlot={(slot) => setSelectedSlot(slot)}
+          disabled={activeBooking !== null}
+        />
+      )}
+
+      {/* Booking Drawer */}
       <BookingModal
         slot={selectedSlot}
+        initialStudentNumber={studentNumber}
         onClose={() => setSelectedSlot(null)}
         onBooked={() => {
-          // Immediately remove the slot from local state (optimistic update)
-          if (selectedSlot) {
-            setSlots((prev) =>
-              prev.filter(
-                (s) =>
-                  !(s.date === selectedSlot.date && s.time === selectedSlot.time)
-              )
-            );
-          }
-          // Then re-fetch in the background to sync with the sheet
+          setSelectedSlot(null);
           fetchSlots(false);
+          if (studentNumber) checkStudentBooking(studentNumber);
         }}
       />
     </>
