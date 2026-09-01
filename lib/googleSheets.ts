@@ -13,6 +13,7 @@ export interface BookedSlot {
   time: string;
   studentNumber: string;
   studentEmail: string;
+  preferredName?: string;
   rowIndex: number;
 }
 
@@ -24,13 +25,14 @@ export class SlotAlreadyBookedError extends Error {
 }
 
 // ─── Column mapping (0-based within the row array) ──────────────────────────
-// Sheet columns: Date | Time | Status | Student Number | Student Email
+// Sheet columns: Date | Time | Status | Student Number | Student Email | Preferred Name
 const COL = {
   DATE: 0,
   TIME: 1,
   STATUS: 2,
   STUDENT_NUMBER: 3,
   STUDENT_EMAIL: 4,
+  PREFERRED_NAME: 5,
 } as const;
 
 const SHEET_NAME = "Sheet1"; // Adjust if your tab has a different name
@@ -39,7 +41,6 @@ const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID!;
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
 function getAuth() {
-  // GOOGLE_PRIVATE_KEY is stored with literal \n in env vars; replace them
   const privateKey = (process.env.GOOGLE_PRIVATE_KEY ?? "").replace(
     /\\n/g,
     "\n"
@@ -62,7 +63,7 @@ function getSheetsClient() {
 
 /** Convert a 1-based row index to an A1 range string for the full data row. */
 function rowRange(rowIndex: number): string {
-  return `${SHEET_NAME}!A${rowIndex}:E${rowIndex}`;
+  return `${SHEET_NAME}!A${rowIndex}:F${rowIndex}`;
 }
 
 /** Fetch ALL rows (including header). Returns raw 2D array. */
@@ -70,7 +71,7 @@ async function getAllRows(): Promise<string[][]> {
   const sheets = getSheetsClient();
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:E`,
+    range: `${SHEET_NAME}!A:F`,
   });
   return (res.data.values ?? []) as string[][];
 }
@@ -79,13 +80,11 @@ async function getAllRows(): Promise<string[][]> {
 
 /**
  * Returns all slots whose Status column is exactly "Available".
- * Row 1 is the header; data starts at row 2, so rowIndex = array index + 1 + 1.
  */
 export async function getAvailableSlots(): Promise<Slot[]> {
   const rows = await getAllRows();
   const slots: Slot[] = [];
 
-  // Skip row 0 (header)
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i];
     const status = (row[COL.STATUS] ?? "").trim();
@@ -93,7 +92,7 @@ export async function getAvailableSlots(): Promise<Slot[]> {
       slots.push({
         date: (row[COL.DATE] ?? "").trim(),
         time: (row[COL.TIME] ?? "").trim(),
-        rowIndex: i + 1, // 1-based sheet row
+        rowIndex: i + 1,
       });
     }
   }
@@ -117,6 +116,7 @@ export async function getAllBookedSlots(): Promise<BookedSlot[]> {
         time: (row[COL.TIME] ?? "").trim(),
         studentNumber: (row[COL.STUDENT_NUMBER] ?? "").trim(),
         studentEmail: (row[COL.STUDENT_EMAIL] ?? "").trim(),
+        preferredName: (row[COL.PREFERRED_NAME] ?? "").trim(),
         rowIndex: i + 1,
       });
     }
@@ -127,20 +127,17 @@ export async function getAllBookedSlots(): Promise<BookedSlot[]> {
 
 /**
  * Books a slot. Performs a double-check read immediately before writing
- * to guard against race conditions (two users booking the same slot
- * at the same moment).
- *
- * Throws `SlotAlreadyBookedError` if the slot is no longer available.
+ * to guard against race conditions.
  */
 export async function bookSlot(
   date: string,
   time: string,
   studentNumber: string,
-  studentEmail: string
+  studentEmail: string,
+  preferredName: string = ""
 ): Promise<void> {
   const sheets = getSheetsClient();
 
-  // 1. Re-read ALL rows to find the correct rowIndex for date+time
   const rows = await getAllRows();
 
   let targetRowIndex: number | null = null;
@@ -152,10 +149,9 @@ export async function bookSlot(
 
     if (rowDate === date && rowTime === time) {
       if (rowStatus !== "Available") {
-        // Slot exists but is already booked — race condition caught!
         throw new SlotAlreadyBookedError(date, time);
       }
-      targetRowIndex = i + 1; // convert to 1-based
+      targetRowIndex = i + 1;
       break;
     }
   }
@@ -164,7 +160,7 @@ export async function bookSlot(
     throw new Error(`Slot not found for date="${date}" time="${time}".`);
   }
 
-  // 2. Double-check: re-read the exact row before writing
+  // Double-check row status
   const checkRes = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range: rowRange(targetRowIndex),
@@ -176,20 +172,19 @@ export async function bookSlot(
     throw new SlotAlreadyBookedError(date, time);
   }
 
-  // 3. Write booking data atomically
+  // Write booking data including Preferred Name
   await sheets.spreadsheets.values.update({
     spreadsheetId: SPREADSHEET_ID,
     range: rowRange(targetRowIndex),
     valueInputOption: "RAW",
     requestBody: {
-      values: [[date, time, "Booked", studentNumber, studentEmail]],
+      values: [[date, time, "Booked", studentNumber, studentEmail, preferredName]],
     },
   });
 }
 
 /**
  * Returns a student's active booking if they have one, or null.
- * Matches Student Number case-insensitively.
  */
 export async function getStudentBooking(
   studentNumber: string
@@ -209,6 +204,7 @@ export async function getStudentBooking(
         time: (row[COL.TIME] ?? "").trim(),
         studentNumber: (row[COL.STUDENT_NUMBER] ?? "").trim(),
         studentEmail: (row[COL.STUDENT_EMAIL] ?? "").trim(),
+        preferredName: (row[COL.PREFERRED_NAME] ?? "").trim(),
         rowIndex: i + 1,
       };
     }
@@ -218,9 +214,7 @@ export async function getStudentBooking(
 }
 
 /**
- * Cancels a student's active booking by setting Status back to "Available"
- * and clearing Student Number & Student Email columns.
- * Returns the cancelled BookedSlot details so email notifications can be sent.
+ * Cancels a student's active booking by setting Status back to "Available".
  */
 export async function cancelSlot(
   studentNumber: string
@@ -236,7 +230,7 @@ export async function cancelSlot(
     range: rowRange(booking.rowIndex),
     valueInputOption: "RAW",
     requestBody: {
-      values: [[booking.date, booking.time, "Available", "", ""]],
+      values: [[booking.date, booking.time, "Available", "", "", ""]],
     },
   });
 

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { X, Calendar, Clock, User, Mail, AlertCircle, Loader2 } from "lucide-react";
+import { X, Calendar, Clock, User, Mail, AlertCircle, Loader2, Sparkles } from "lucide-react";
 import SuccessView from "./SuccessView";
 
 interface Slot {
@@ -19,6 +19,7 @@ interface BookingModalProps {
 
 interface FormErrors {
   studentNumber?: string;
+  preferredName?: string;
   studentEmail?: string;
   global?: string;
 }
@@ -27,6 +28,7 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function BookingModal({ slot, initialStudentNumber = "", onClose, onBooked }: BookingModalProps) {
   const [studentNumber, setStudentNumber] = useState(initialStudentNumber);
+  const [preferredName, setPreferredName] = useState("");
   const [studentEmail, setStudentEmail] = useState("");
   const [errors, setErrors] = useState<FormErrors>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -35,6 +37,7 @@ export default function BookingModal({ slot, initialStudentNumber = "", onClose,
   // Reset state whenever a new slot is selected
   useEffect(() => {
     setStudentNumber(initialStudentNumber);
+    setPreferredName("");
     setStudentEmail("");
     setErrors({});
     setIsSubmitting(false);
@@ -55,6 +58,9 @@ export default function BookingModal({ slot, initialStudentNumber = "", onClose,
     const newErrors: FormErrors = {};
     if (!studentNumber.trim()) {
       newErrors.studentNumber = "Student number is required.";
+    }
+    if (!preferredName.trim()) {
+      newErrors.preferredName = "Preferred name is required.";
     }
     if (!studentEmail.trim()) {
       newErrors.studentEmail = "Email is required.";
@@ -82,6 +88,7 @@ export default function BookingModal({ slot, initialStudentNumber = "", onClose,
           date: slot.date,
           time: slot.time,
           studentNumber: studentNumber.trim(),
+          preferredName: preferredName.trim(),
           studentEmail: studentEmail.trim(),
         }),
       });
@@ -135,7 +142,7 @@ export default function BookingModal({ slot, initialStudentNumber = "", onClose,
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: "100%", opacity: 0 }}
             transition={{ type: "spring", stiffness: 320, damping: 32 }}
-            className="fixed right-0 top-0 bottom-0 z-50 w-full max-w-md glass-strong flex flex-col"
+            className="fixed right-0 top-0 bottom-0 z-50 w-full max-w-md glass-strong flex flex-col shadow-2xl"
             style={{ borderLeft: "1px solid var(--border-hover)" }}
           >
             {/* Header */}
@@ -238,10 +245,10 @@ export default function BookingModal({ slot, initialStudentNumber = "", onClose,
                   {/* Form */}
                   <form onSubmit={handleSubmit} noValidate id="booking-form">
                     {/* Student Number */}
-                    <div className="mb-5">
+                    <div className="mb-4">
                       <label
                         htmlFor="studentNumber"
-                        className="block text-sm font-medium mb-2"
+                        className="block text-sm font-medium mb-1.5"
                         style={{ color: "var(--text-secondary)" }}
                       >
                         <span className="flex items-center gap-2">
@@ -281,11 +288,55 @@ export default function BookingModal({ slot, initialStudentNumber = "", onClose,
                       </AnimatePresence>
                     </div>
 
+                    {/* Preferred Name */}
+                    <div className="mb-4">
+                      <label
+                        htmlFor="preferredName"
+                        className="block text-sm font-medium mb-1.5"
+                        style={{ color: "var(--text-secondary)" }}
+                      >
+                        <span className="flex items-center gap-2">
+                          <Sparkles size={14} className="text-indigo-400" aria-hidden="true" />
+                          Preferred Name
+                        </span>
+                      </label>
+                      <input
+                        id="preferredName"
+                        type="text"
+                        value={preferredName}
+                        onChange={(e) => {
+                          setPreferredName(e.target.value);
+                          if (errors.preferredName)
+                            setErrors((prev) => ({ ...prev, preferredName: undefined }));
+                        }}
+                        placeholder="e.g. Alex Tan"
+                        className={`input-field ${errors.preferredName ? "error" : ""}`}
+                        autoComplete="name"
+                        aria-describedby={errors.preferredName ? "preferredName-error" : undefined}
+                        aria-invalid={!!errors.preferredName}
+                      />
+                      <AnimatePresence>
+                        {errors.preferredName && (
+                          <motion.p
+                            id="preferredName-error"
+                            role="alert"
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: "auto" }}
+                            exit={{ opacity: 0, height: 0 }}
+                            className="text-xs mt-1.5"
+                            style={{ color: "#f87171" }}
+                          >
+                            {errors.preferredName}
+                          </motion.p>
+                        )}
+                      </AnimatePresence>
+                    </div>
+
                     {/* Student Email */}
                     <div className="mb-6">
                       <label
                         htmlFor="studentEmail"
-                        className="block text-sm font-medium mb-2"
+                        className="block text-sm font-medium mb-1.5"
                         style={{ color: "var(--text-secondary)" }}
                       >
                         <span className="flex items-center gap-2">

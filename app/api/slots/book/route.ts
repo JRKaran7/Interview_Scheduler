@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { date, time, studentNumber, studentEmail } = body as Record<
+  const { date, time, studentNumber, studentEmail, preferredName } = body as Record<
     string,
     unknown
   >;
@@ -42,6 +42,7 @@ export async function POST(req: NextRequest) {
   const cleanTime = sanitize(time);
   const cleanStudentNumber = sanitize(studentNumber);
   const cleanEmail = sanitize(studentEmail);
+  const cleanPreferredName = sanitize(preferredName);
 
   // ── Field presence checks ──
   const errors: Record<string, string> = {};
@@ -49,6 +50,7 @@ export async function POST(req: NextRequest) {
   if (!cleanDate) errors.date = "Date is required.";
   if (!cleanTime) errors.time = "Time is required.";
   if (!cleanStudentNumber) errors.studentNumber = "Student number is required.";
+  if (!cleanPreferredName) errors.preferredName = "Preferred name is required.";
   if (!cleanEmail) {
     errors.studentEmail = "Email is required.";
   } else if (!EMAIL_REGEX.test(cleanEmail)) {
@@ -82,7 +84,7 @@ export async function POST(req: NextRequest) {
 
   // ── Book the slot ──
   try {
-    await bookSlot(cleanDate, cleanTime, cleanStudentNumber, cleanEmail);
+    await bookSlot(cleanDate, cleanTime, cleanStudentNumber, cleanEmail, cleanPreferredName);
 
     // ── Send instant confirmation email ──
     try {
@@ -90,7 +92,8 @@ export async function POST(req: NextRequest) {
         cleanEmail,
         cleanStudentNumber,
         cleanDate,
-        cleanTime
+        cleanTime,
+        cleanPreferredName
       );
     } catch (emailErr) {
       console.error("[POST /api/slots/book] Email trigger error:", emailErr);
@@ -105,6 +108,7 @@ export async function POST(req: NextRequest) {
           time: cleanTime,
           studentNumber: cleanStudentNumber,
           studentEmail: cleanEmail,
+          preferredName: cleanPreferredName,
         },
       },
       { status: 200 }

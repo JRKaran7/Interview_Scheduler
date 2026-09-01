@@ -19,9 +19,34 @@ async function sendHtmlEmail(
   subject: string,
   html: string
 ): Promise<{ success: boolean; error?: string }> {
-  const brevoKey = process.env.BREVO_API_KEY;
+  // 1. Gmail SMTP (Highest deliverability: Google mail servers sign SPF/DKIM directly from karan.rajankar07@gmail.com)
+  const gmailUser = process.env.GMAIL_USER;
+  const gmailPass = (process.env.GMAIL_APP_PASSWORD ?? "").replace(/\s+/g, "");
+  if (gmailUser && gmailPass) {
+    try {
+      const transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: { user: gmailUser, pass: gmailPass },
+      });
 
-  // 1. Prefer Brevo REST API (Free, high deliverability to all university/Outlook inboxes)
+      const info = await transporter.sendMail({
+        from: `"Interview Scheduler" <${gmailUser}>`,
+        to,
+        subject,
+        html,
+      });
+
+      console.log(`[EMAIL] Successfully sent email to ${to} via Gmail SMTP (ID: ${info.messageId}).`);
+      return { success: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[EMAIL] Gmail SMTP failed for ${to}:`, msg);
+      // Fall through to Brevo API
+    }
+  }
+
+  // 2. Brevo REST API Fallback
+  const brevoKey = process.env.BREVO_API_KEY;
   if (brevoKey) {
     try {
       const senderEmail = process.env.BREVO_SENDER_EMAIL || "karan.rajankar07@gmail.com";
@@ -49,7 +74,6 @@ async function sendHtmlEmail(
       } else {
         const errMsg = data.message || JSON.stringify(data);
         console.error(`[EMAIL] Brevo API returned error for ${to}:`, errMsg);
-        // Fall through to next providers if Brevo fails
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -57,88 +81,31 @@ async function sendHtmlEmail(
     }
   }
 
-  // 2. Outlook / Microsoft 365 SMTP fallback
-  const outlookUser = process.env.OUTLOOK_USER;
-  const outlookPass = process.env.OUTLOOK_PASS;
-  if (outlookUser && outlookPass) {
+  // 3. Resend API fallback
+  const resendKey = process.env.RESEND_API_KEY;
+  if (resendKey) {
     try {
-      const transporter = nodemailer.createTransport({
-        host: "smtp.office365.com",
-        port: 587,
-        secure: false,
-        auth: { user: outlookUser, pass: outlookPass },
-        tls: { ciphers: "SSLv3", rejectUnauthorized: false },
-      });
-
-      await transporter.sendMail({
-        from: `"Interview Scheduler" <${outlookUser}>`,
-        to,
+      const resend = new Resend(resendKey);
+      const res = await resend.emails.send({
+        from: process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev",
+        to: [to],
         subject,
         html,
       });
 
-      console.log(`[EMAIL] Successfully sent email to ${to} via Outlook SMTP.`);
-      return { success: true };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[EMAIL] Outlook SMTP failed for ${to}:`, msg);
-    }
-  }
-
-  // 3. Gmail SMTP fallback
-  const gmailUser = process.env.GMAIL_USER;
-  const gmailPass = process.env.GMAIL_APP_PASSWORD;
-  if (gmailUser && gmailPass) {
-    try {
-      const transporter = nodemailer.createTransport({
-        service: "gmail",
-        auth: { user: gmailUser, pass: gmailPass },
-      });
-
-      await transporter.sendMail({
-        from: `"Interview Scheduler" <${gmailUser}>`,
-        to,
-        subject,
-        html,
-      });
-
-      console.log(`[EMAIL] Successfully sent email to ${to} via Gmail SMTP.`);
-      return { success: true };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[EMAIL] Gmail SMTP failed for ${to}:`, msg);
-    }
-  }
-
-  // 4. Resend API fallback
-  if (process.env.RESEND_API_KEY) {
-    try {
-      const resend = new Resend(process.env.RESEND_API_KEY);
-      const { error } = await resend.emails.send({
-        from: process.env.RESEND_FROM_EMAIL ?? "onboarding@resend.dev",
-        to,
-        subject,
-        html,
-      });
-
-      if (error) {
-        console.error(`[EMAIL] Resend API failed for ${to}:`, error.message);
-        return { success: false, error: error.message };
+      if (res.error) {
+        console.error(`[EMAIL] Resend API error for ${to}:`, res.error);
+      } else {
+        console.log(`[EMAIL] Successfully sent email to ${to} via Resend API (ID: ${res.data?.id}).`);
+        return { success: true };
       }
-
-      console.log(`[EMAIL] Successfully sent email to ${to} via Resend.`);
-      return { success: true };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[EMAIL] Resend API exception for ${to}:`, msg);
-      return { success: false, error: msg };
+      console.error(`[EMAIL] Resend exception for ${to}:`, msg);
     }
   }
 
-  return {
-    success: false,
-    error: "No working email provider credentials configured.",
-  };
+  return { success: false, error: "All email providers failed to send." };
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -165,12 +132,13 @@ export async function sendBookingConfirmationEmail(
   studentEmail: string,
   studentNumber: string,
   date: string,
-  time: string
+  time: string,
+  preferredName?: string
 ): Promise<SendReminderResult> {
   const result = await sendHtmlEmail(
     studentEmail,
     `Interview Booking Confirmation: ${date} at ${time}`,
-    buildConfirmationHtml(studentEmail, studentNumber, date, time)
+    buildConfirmationHtml(studentEmail, studentNumber, date, time, preferredName)
   );
 
   return {
@@ -184,12 +152,13 @@ export async function sendCancellationEmail(
   studentEmail: string,
   studentNumber: string,
   date: string,
-  time: string
+  time: string,
+  preferredName?: string
 ): Promise<SendReminderResult> {
   const result = await sendHtmlEmail(
     studentEmail,
     `Interview Booking Cancelled: ${date} at ${time}`,
-    buildCancellationHtml(studentEmail, studentNumber, date, time)
+    buildCancellationHtml(studentEmail, studentNumber, date, time, preferredName)
   );
 
   return {
@@ -203,8 +172,10 @@ function buildCancellationHtml(
   studentEmail: string,
   studentNumber: string,
   date: string,
-  time: string
+  time: string,
+  preferredName?: string
 ): string {
+  const greetingName = preferredName ? `${preferredName} (${studentNumber})` : `Student (${studentNumber})`;
   return `<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
@@ -226,7 +197,7 @@ function buildCancellationHtml(
           </tr>
           <tr>
             <td style="padding:36px 40px;">
-              <p style="margin:0 0 16px;font-size:15px;color:#94a3b8;line-height:1.7;">Hi Student (${studentNumber}),</p>
+              <p style="margin:0 0 16px;font-size:15px;color:#94a3b8;line-height:1.7;">Hi ${greetingName},</p>
               <p style="margin:0 0 28px;font-size:15px;color:#e2e8f0;line-height:1.7;">
                 Your interview reservation has been successfully cancelled and reopened for other students:
               </p>
@@ -343,8 +314,10 @@ function buildConfirmationHtml(
   studentEmail: string,
   studentNumber: string,
   date: string,
-  time: string
+  time: string,
+  preferredName?: string
 ): string {
+  const greetingName = preferredName ? `${preferredName} (${studentNumber})` : `Student (${studentNumber})`;
   return `<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
@@ -371,7 +344,7 @@ function buildConfirmationHtml(
           </tr>
           <tr>
             <td style="padding:36px 40px;">
-              <p style="margin:0 0 16px;font-size:15px;color:#94a3b8;line-height:1.7;">Hi Student (${studentNumber}),</p>
+              <p style="margin:0 0 16px;font-size:15px;color:#94a3b8;line-height:1.7;">Hi ${greetingName},</p>
               <p style="margin:0 0 28px;font-size:15px;color:#e2e8f0;line-height:1.7;">
                 Your interview slot has been successfully booked. Below are the details of your appointment:
               </p>
