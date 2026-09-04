@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { cancelSlot } from "@/lib/googleSheets";
 import { sendCancellationEmail } from "@/lib/email";
+import { verifySessionCookie, SESSION_COOKIE_NAME } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -31,8 +33,30 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const cleanStudentNumber = studentNumber.trim();
+
+  // ── Session ownership check ──
+  // Verify the signed cookie proves the caller owns this student number.
+  const cookieStore = await cookies();
+  const sessionCookie = cookieStore.get(SESSION_COOKIE_NAME)?.value ?? "";
+  const sessionStudentNumber = verifySessionCookie(sessionCookie);
+
+  if (!sessionStudentNumber) {
+    return NextResponse.json(
+      { success: false, message: "Not authenticated. Please log in and try again." },
+      { status: 401 }
+    );
+  }
+
+  if (sessionStudentNumber.toLowerCase() !== cleanStudentNumber.toLowerCase()) {
+    return NextResponse.json(
+      { success: false, message: "You may only cancel your own booking." },
+      { status: 403 }
+    );
+  }
+
   try {
-    const cancelledBooking = await cancelSlot(studentNumber.trim());
+    const cancelledBooking = await cancelSlot(cleanStudentNumber);
 
     // Send cancellation email non-blockingly
     if (cancelledBooking.studentEmail) {

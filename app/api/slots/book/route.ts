@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { bookSlot, getStudentBooking, SlotAlreadyBookedError } from "@/lib/googleSheets";
 import { sendBookingConfirmationEmail } from "@/lib/email";
+import { verifySessionCookie, SESSION_COOKIE_NAME } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +66,26 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // ── Session ownership check ──
+  // Verify the signed session cookie proves the caller owns cleanStudentNumber.
+  const cookieStore = await cookies();
+  const sessionCookie = cookieStore.get(SESSION_COOKIE_NAME)?.value ?? "";
+  const sessionStudentNumber = verifySessionCookie(sessionCookie);
+
+  if (!sessionStudentNumber) {
+    return NextResponse.json(
+      { success: false, message: "Not authenticated. Please log in and try again." },
+      { status: 401 }
+    );
+  }
+
+  if (sessionStudentNumber.toLowerCase() !== cleanStudentNumber.toLowerCase()) {
+    return NextResponse.json(
+      { success: false, message: "You may only book under your own student number." },
+      { status: 403 }
+    );
+  }
+
   // ── Check if student already has an active booking ──
   try {
     const existingBooking = await getStudentBooking(cleanStudentNumber);
@@ -72,7 +94,8 @@ export async function POST(req: NextRequest) {
         {
           success: false,
           code: "ALREADY_BOOKED",
-          message: `Student number "${cleanStudentNumber}" already has an active interview booking on ${existingBooking.date} at ${existingBooking.time}. Please cancel your existing booking before selecting a new time slot.`,
+          // Security: do not echo back the student number — prevents ID enumeration
+          message: `You already have an active interview booking on ${existingBooking.date} at ${existingBooking.time}. Please cancel your existing booking before selecting a new time slot.`,
           existingBooking,
         },
         { status: 400 }
@@ -123,6 +146,15 @@ export async function POST(req: NextRequest) {
           code: "SLOT_TAKEN",
         },
         { status: 409 }
+      );
+    }
+
+    // Past-date guard fired — return 422 Unprocessable
+    const msg = error instanceof Error ? error.message : null;
+    if (msg === "Cannot book a slot for a date in the past.") {
+      return NextResponse.json(
+        { success: false, message: msg },
+        { status: 422 }
       );
     }
 

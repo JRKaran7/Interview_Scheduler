@@ -16,11 +16,26 @@ export async function GET(req: NextRequest) {
 
   try {
     const booking = await getStudentBooking(studentNumber.trim());
+
+    // Security: strip the student's email from the response.
+    // The email is PII — callers should not be able to harvest it by
+    // querying arbitrary student numbers. The frontend only needs the
+    // booking presence + date/time/name to display the active-booking banner.
+    const safeBooking = booking
+      ? {
+          date: booking.date,
+          time: booking.time,
+          studentNumber: booking.studentNumber,
+          preferredName: booking.preferredName,
+          rowIndex: booking.rowIndex,
+        }
+      : null;
+
     return NextResponse.json(
       {
         success: true,
         hasBooking: booking !== null,
-        booking,
+        booking: safeBooking,
       },
       { status: 200 }
     );

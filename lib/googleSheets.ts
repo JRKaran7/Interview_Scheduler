@@ -66,6 +66,74 @@ function rowRange(rowIndex: number): string {
   return `${SHEET_NAME}!A${rowIndex}:F${rowIndex}`;
 }
 
+/**
+ * Returns midnight (00:00:00.000) of today in local server time.
+ * Used for past-date filtering — slots strictly before this timestamp are excluded.
+ */
+function getTodayMidnight(): Date {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+}
+
+/**
+ * Parses a date string from the Google Sheet into a JS Date.
+ * Handles the following formats:
+ *   DD/MM/YYYY  — "04/09/2026"
+ *   YYYY-MM-DD  — "2026-09-04"  (ISO)
+ *   MM/DD/YYYY  — "09/04/2026"  (US — only attempted as last resort)
+ *   "September 4, 2026"         (long)
+ *   "4 Sep 2026"                (short)
+ *   "Sep 4, 2026"               (short alt)
+ * Returns null if the string cannot be reliably parsed.
+ */
+function parseDateFromSheet(dateStr: string): Date | null {
+  if (!dateStr) return null;
+
+  // DD/MM/YYYY
+  const dmyMatch = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (dmyMatch) {
+    const d = parseInt(dmyMatch[1], 10);
+    const m = parseInt(dmyMatch[2], 10) - 1;
+    const y = parseInt(dmyMatch[3], 10);
+    const dt = new Date(y, m, d);
+    // Validate: day must be <= 31, month <= 11
+    if (dt.getFullYear() === y && dt.getMonth() === m && dt.getDate() === d) {
+      return dt;
+    }
+  }
+
+  // YYYY-MM-DD (ISO without time)
+  const isoMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    const y = parseInt(isoMatch[1], 10);
+    const m = parseInt(isoMatch[2], 10) - 1;
+    const d = parseInt(isoMatch[3], 10);
+    const dt = new Date(y, m, d);
+    if (dt.getFullYear() === y && dt.getMonth() === m && dt.getDate() === d) {
+      return dt;
+    }
+  }
+
+  // "Month D, YYYY" or "D Month YYYY" or "Month D YYYY"
+  const loose = new Date(dateStr);
+  if (!isNaN(loose.getTime())) {
+    // new Date() parses these as UTC midnight; convert to local
+    return new Date(loose.getFullYear(), loose.getMonth(), loose.getDate());
+  }
+
+  return null;
+}
+
+/**
+ * Returns true if the given date string represents a date strictly before today.
+ * Dates that cannot be parsed are kept (shown) to avoid hiding real slots.
+ */
+function isBeforeToday(dateStr: string): boolean {
+  const parsed = parseDateFromSheet(dateStr);
+  if (!parsed) return false; // can't determine — don't hide
+  return parsed.getTime() < getTodayMidnight().getTime();
+}
+
 /** Fetch ALL rows (including header). Returns raw 2D array. */
 async function getAllRows(): Promise<string[][]> {
   const sheets = getSheetsClient();
@@ -89,8 +157,11 @@ export async function getAvailableSlots(): Promise<Slot[]> {
     const row = rows[i];
     const status = (row[COL.STATUS] ?? "").trim();
     if (status === "Available") {
+      const dateStr = (row[COL.DATE] ?? "").trim();
+      // ── Security: never surface past-date slots ──
+      if (isBeforeToday(dateStr)) continue;
       slots.push({
-        date: (row[COL.DATE] ?? "").trim(),
+        date: dateStr,
         time: (row[COL.TIME] ?? "").trim(),
         rowIndex: i + 1,
       });
@@ -136,6 +207,11 @@ export async function bookSlot(
   studentEmail: string,
   preferredName: string = ""
 ): Promise<void> {
+  // ── Security: reject bookings for past dates ──
+  if (isBeforeToday(date)) {
+    throw new Error("Cannot book a slot for a date in the past.");
+  }
+
   const sheets = getSheetsClient();
 
   const rows = await getAllRows();

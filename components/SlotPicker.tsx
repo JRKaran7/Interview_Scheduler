@@ -84,12 +84,33 @@ export default function SlotPicker() {
     if (studentNumber) checkStudentBooking(studentNumber);
   }, [studentNumber, checkStudentBooking]);
 
-  const handleLogin = (id: string) => {
+  const handleLogin = async (id: string) => {
+    // Set the signed server-side session cookie first
+    try {
+      const res = await fetch("/api/auth/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentNumber: id }),
+      });
+      if (!res.ok) {
+        console.error("[Login] Session API failed:", await res.text());
+        // Don't block UX — still set the display state so the app works
+        // even if SESSION_SECRET isn't configured yet (dev fallback).
+      }
+    } catch (err) {
+      console.error("[Login] Could not reach session API:", err);
+    }
     setStudentNumber(id);
     localStorage.setItem(SESSION_STORAGE_KEY, id);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    // Clear the server-side session cookie
+    try {
+      await fetch("/api/auth/session", { method: "DELETE" });
+    } catch (err) {
+      console.error("[Logout] Could not reach session API:", err);
+    }
     setStudentNumber("");
     setActiveBooking(null);
     localStorage.removeItem(SESSION_STORAGE_KEY);

@@ -91,7 +91,10 @@ export async function GET(req: NextRequest) {
   } catch (error) {
     console.error("[CRON /api/cron/reminders] Error:", error);
     return NextResponse.json(
-      { success: false, message: "Cron job failed.", error: String(error) },
+      // Security: do not leak the raw error to the response body \u2014
+      // it may contain stack traces or internal paths. The error is
+      // already logged above for server-side debugging.
+      { success: false, message: "Cron job failed." },
       { status: 500 }
     );
   }

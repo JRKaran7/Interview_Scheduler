@@ -18,17 +18,47 @@ interface CalendarViewProps {
 }
 
 function parseDDMMYYYY(dateStr: string): Date | null {
+  // Try DD/MM/YYYY first (primary sheet format)
   const parts = dateStr.split("/");
   if (parts.length === 3) {
     const day = parseInt(parts[0], 10);
     const month = parseInt(parts[1], 10) - 1;
     const year = parseInt(parts[2], 10);
     if (!isNaN(day) && !isNaN(month) && !isNaN(year)) {
-      return new Date(year, month, day);
+      const dt = new Date(year, month, day);
+      // Validate: ensure the parsed date matches the inputs (no overflow)
+      if (
+        dt.getFullYear() === year &&
+        dt.getMonth() === month &&
+        dt.getDate() === day
+      ) {
+        return dt;
+      }
     }
   }
+  // Try ISO (YYYY-MM-DD) and other formats via loose parse, converting UTC -> local
   const fallback = new Date(dateStr);
-  return isNaN(fallback.getTime()) ? null : fallback;
+  if (!isNaN(fallback.getTime())) {
+    return new Date(
+      fallback.getFullYear(),
+      fallback.getMonth(),
+      fallback.getDate()
+    );
+  }
+  return null;
+}
+
+/** Returns midnight (00:00:00) of today in local time. */
+function getTodayMidnight(): Date {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+}
+
+/** True if the slot date is strictly before today (already passed). */
+function isBeforeToday(dateStr: string): boolean {
+  const parsed = parseDDMMYYYY(dateStr);
+  if (!parsed) return false; // unknown format — show it rather than hide it
+  return parsed.getTime() < getTodayMidnight().getTime();
 }
 
 export default function CalendarView({
@@ -47,13 +77,15 @@ export default function CalendarView({
     }, {});
   }, [slots]);
 
-  // Sorted date keys
+  // Sorted date keys — past dates excluded (defence-in-depth; server also filters)
   const dateKeys = useMemo(() => {
-    return Object.keys(grouped).sort((a, b) => {
-      const da = parseDDMMYYYY(a)?.getTime() ?? 0;
-      const db = parseDDMMYYYY(b)?.getTime() ?? 0;
-      return da - db;
-    });
+    return Object.keys(grouped)
+      .filter((d) => !isBeforeToday(d))
+      .sort((a, b) => {
+        const da = parseDDMMYYYY(a)?.getTime() ?? 0;
+        const db = parseDDMMYYYY(b)?.getTime() ?? 0;
+        return da - db;
+      });
   }, [grouped]);
 
   // Active selected date
