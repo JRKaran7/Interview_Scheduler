@@ -21,7 +21,42 @@ async function sendHtmlEmail(
 ): Promise<{ success: boolean; error?: string }> {
   let lastError = "";
 
-  // 1. Gmail SMTP (Highest deliverability: Google mail servers sign SPF/DKIM directly from karan.rajankar07@gmail.com)
+  // 1. Custom / Generic SMTP (e.g. Outlook/Office 365, Mailtrap, custom domain)
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  if (smtpHost && smtpUser && smtpPass) {
+    try {
+      const smtpPort = Number(process.env.SMTP_PORT) || 587;
+      const smtpSecure = process.env.SMTP_SECURE === "true" || smtpPort === 465;
+      const smtpFrom = process.env.SMTP_FROM || `Interview Scheduler <${smtpUser}>`;
+
+      const transporter = nodemailer.createTransport({
+        host: smtpHost,
+        port: smtpPort,
+        secure: smtpSecure,
+        auth: { user: smtpUser, pass: smtpPass },
+        tls: { rejectUnauthorized: false },
+      });
+
+      const info = await transporter.sendMail({
+        from: smtpFrom,
+        to,
+        subject,
+        html,
+      });
+
+      console.log(`[EMAIL] Successfully sent email to ${to} via Custom SMTP (${smtpHost}) (ID: ${info.messageId}).`);
+      return { success: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      lastError = `Custom SMTP Error (${smtpHost}): ${msg}`;
+      console.error(`[EMAIL] Custom SMTP failed for ${to}:`, msg);
+      // Fall through to other providers
+    }
+  }
+
+  // 2. Gmail SMTP (Highest deliverability)
   const gmailUser = process.env.GMAIL_USER;
   const gmailPass = (process.env.GMAIL_APP_PASSWORD ?? "").replace(/\s+/g, "");
   if (gmailUser && gmailPass) {
