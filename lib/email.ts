@@ -19,6 +19,8 @@ async function sendHtmlEmail(
   subject: string,
   html: string
 ): Promise<{ success: boolean; error?: string }> {
+  let lastError = "";
+
   // 1. Gmail SMTP (Highest deliverability: Google mail servers sign SPF/DKIM directly from karan.rajankar07@gmail.com)
   const gmailUser = process.env.GMAIL_USER;
   const gmailPass = (process.env.GMAIL_APP_PASSWORD ?? "").replace(/\s+/g, "");
@@ -40,22 +42,28 @@ async function sendHtmlEmail(
       return { success: true };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      lastError = `Gmail SMTP Error: ${msg}`;
       console.error(`[EMAIL] Gmail SMTP failed for ${to}:`, msg);
       // Fall through to Brevo API
     }
   }
 
   // 2. Brevo REST API Fallback
-  const brevoKey = process.env.BREVO_API_KEY;
+  const brevoKey = (process.env.BREVO_API_KEY ?? "").trim().replace(/^["']|["']$/g, "");
   if (brevoKey) {
     try {
-      const senderEmail = process.env.BREVO_SENDER_EMAIL || "karan.rajankar07@gmail.com";
-      const senderName  = process.env.BREVO_SENDER_NAME || "Interview Scheduler";
+      const senderEmail = (process.env.BREVO_SENDER_EMAIL || "karan.rajankar07@gmail.com")
+        .trim()
+        .replace(/^["']|["']$/g, "");
+      const senderName = (process.env.BREVO_SENDER_NAME || "Interview Scheduler")
+        .trim()
+        .replace(/^["']|["']$/g, "");
 
       const res = await fetch("https://api.brevo.com/v3/smtp/email", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "accept": "application/json",
           "api-key": brevoKey,
         },
         body: JSON.stringify({
@@ -69,20 +77,22 @@ async function sendHtmlEmail(
       const data = await res.json();
 
       if (res.ok) {
-        console.log(`[EMAIL] Successfully sent email to ${to} via Brevo API (Message ID: ${data.messageId}).`);
+        console.log(`[EMAIL] Successfully sent email to ${to} via Brevo API (Message ID: ${data.messageId || data.messageId}).`);
         return { success: true };
       } else {
         const errMsg = data.message || JSON.stringify(data);
+        lastError = `Brevo API Error: ${errMsg}`;
         console.error(`[EMAIL] Brevo API returned error for ${to}:`, errMsg);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      lastError = `Brevo fetch exception: ${msg}`;
       console.error(`[EMAIL] Brevo fetch exception for ${to}:`, msg);
     }
   }
 
   // 3. Resend API fallback
-  const resendKey = process.env.RESEND_API_KEY;
+  const resendKey = (process.env.RESEND_API_KEY ?? "").trim().replace(/^["']|["']$/g, "");
   if (resendKey) {
     try {
       const resend = new Resend(resendKey);
@@ -94,6 +104,7 @@ async function sendHtmlEmail(
       });
 
       if (res.error) {
+        lastError = `Resend Error: ${res.error.message || JSON.stringify(res.error)}`;
         console.error(`[EMAIL] Resend API error for ${to}:`, res.error);
       } else {
         console.log(`[EMAIL] Successfully sent email to ${to} via Resend API (ID: ${res.data?.id}).`);
@@ -101,12 +112,17 @@ async function sendHtmlEmail(
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      lastError = `Resend exception: ${msg}`;
       console.error(`[EMAIL] Resend exception for ${to}:`, msg);
     }
   }
 
-  console.warn(`[EMAIL] Skipped sending email to ${to}: No email provider configured (set BREVO_API_KEY, RESEND_API_KEY, or GMAIL_USER + GMAIL_APP_PASSWORD in Vercel Environment Variables).`);
-  return { success: false, error: "No email provider configured in environment variables." };
+  if (!gmailUser && !brevoKey && !resendKey) {
+    console.warn(`[EMAIL] Skipped sending email to ${to}: No email provider configured in Vercel Environment Variables.`);
+    return { success: false, error: "No email provider configured in environment variables." };
+  }
+
+  return { success: false, error: lastError || "All email providers failed to send." };
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
