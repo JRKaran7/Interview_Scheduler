@@ -110,14 +110,19 @@ export async function POST(req: NextRequest) {
     await bookSlot(cleanDate, cleanTime, cleanStudentNumber, cleanEmail, cleanPreferredName);
 
     // ── Send instant confirmation email ──
+    let emailSent = false;
     try {
-      await sendBookingConfirmationEmail(
+      const emailResult = await sendBookingConfirmationEmail(
         cleanEmail,
         cleanStudentNumber,
         cleanDate,
         cleanTime,
         cleanPreferredName
       );
+      emailSent = emailResult.success;
+      if (!emailSent) {
+        console.warn("[POST /api/slots/book] Confirmation email not sent:", emailResult.error);
+      }
     } catch (emailErr) {
       console.error("[POST /api/slots/book] Email trigger error:", emailErr);
     }
@@ -126,6 +131,7 @@ export async function POST(req: NextRequest) {
       {
         success: true,
         message: "Booking confirmed!",
+        emailSent,
         booking: {
           date: cleanDate,
           time: cleanTime,

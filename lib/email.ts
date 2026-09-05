@@ -105,7 +105,8 @@ async function sendHtmlEmail(
     }
   }
 
-  return { success: false, error: "All email providers failed to send." };
+  console.warn(`[EMAIL] Skipped sending email to ${to}: No email provider configured (set BREVO_API_KEY, RESEND_API_KEY, or GMAIL_USER + GMAIL_APP_PASSWORD in Vercel Environment Variables).`);
+  return { success: false, error: "No email provider configured in environment variables." };
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
