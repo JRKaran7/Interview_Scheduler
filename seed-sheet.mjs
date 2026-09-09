@@ -40,7 +40,7 @@ loadEnv();
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID;
+const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID || "108CN5yesthvwP9eD3KiMwGa5Q1Aan43OZfS86FgFfnk";
 const CLIENT_EMAIL   = process.env.GOOGLE_CLIENT_EMAIL;
 const PRIVATE_KEY    = (process.env.GOOGLE_PRIVATE_KEY ?? "").replace(/\\n/g, "\n");
 const SHEET_NAME     = "Sheet1";

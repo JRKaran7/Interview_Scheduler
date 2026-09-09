@@ -36,7 +36,8 @@ const COL = {
 } as const;
 
 const SHEET_NAME = "Sheet1"; // Adjust if your tab has a different name
-const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID!;
+// Google Sheet: https://docs.google.com/spreadsheets/d/108CN5yesthvwP9eD3KiMwGa5Q1Aan43OZfS86FgFfnk/edit?gid=0#gid=0
+const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID || "108CN5yesthvwP9eD3KiMwGa5Q1Aan43OZfS86FgFfnk";
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
