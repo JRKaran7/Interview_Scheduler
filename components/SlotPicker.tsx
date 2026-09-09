@@ -182,6 +182,15 @@ export default function SlotPicker() {
 
   const handleCancelBooking = async () => {
     if (!studentNumber) return;
+    try {
+      await fetch("/api/auth/session", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentNumber }),
+      });
+    } catch {}
+
     const res = await fetch("/api/slots/cancel", {
       method: "POST",
       credentials: "include",

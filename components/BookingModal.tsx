@@ -81,6 +81,15 @@ export default function BookingModal({ slot, initialStudentNumber = "", onClose,
     setErrors({});
 
     try {
+      // 1. Auto-refresh/establish signed session cookie for this student number
+      await fetch("/api/auth/session", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentNumber: studentNumber.trim() }),
+      });
+
+      // 2. Submit booking request
       const res = await fetch("/api/slots/book", {
         method: "POST",
         credentials: "include",

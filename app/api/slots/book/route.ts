@@ -143,6 +143,7 @@ export async function POST(req: NextRequest) {
       { status: 200 }
     );
   } catch (error) {
+    console.error("[POST /api/slots/book] Error caught:", error);
     if (error instanceof SlotAlreadyBookedError) {
       return NextResponse.json(
         {
@@ -155,8 +156,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Past-date guard fired — return 422 Unprocessable
-    const msg = error instanceof Error ? error.message : null;
+    const msg = error instanceof Error ? error.message : typeof error === "string" ? error : null;
     if (msg === "Cannot book a slot for a date in the past.") {
       return NextResponse.json(
         { success: false, message: msg },
@@ -164,7 +164,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    console.error("[POST /api/slots/book] Error:", error);
+    if (msg?.includes("DECODER routines") || msg?.includes("unsupported")) {
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            "Invalid GOOGLE_PRIVATE_KEY in .env.local. Please ensure it is a valid RSA private key in PEM format (wrapped in quotes with \\n for line breaks).",
+        },
+        { status: 500 }
+      );
+    }
+
+    if (msg) {
+      return NextResponse.json(
+        { success: false, message: msg },
+        { status: 500 }
+      );
+    }
+
     return NextResponse.json(
       {
         success: false,

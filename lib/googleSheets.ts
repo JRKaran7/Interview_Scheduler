@@ -1,11 +1,12 @@
 import { google } from "googleapis";
+import { createPrivateKey } from "crypto";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface Slot {
   date: string;
   time: string;
-  rowIndex: number; // 1-based sheet row (header = row 1, data starts at 2)
+  rowIndex: number; // 1-based sheet row
 }
 
 export interface BookedSlot {
@@ -24,18 +25,7 @@ export class SlotAlreadyBookedError extends Error {
   }
 }
 
-// ─── Column mapping (0-based within the row array) ──────────────────────────
-// Sheet columns: Date | Time | Status | Student Number | Student Email | Preferred Name
-const COL = {
-  DATE: 0,
-  TIME: 1,
-  STATUS: 2,
-  STUDENT_NUMBER: 3,
-  STUDENT_EMAIL: 4,
-  PREFERRED_NAME: 5,
-} as const;
-
-const SHEET_NAME = "Sheet1"; // Adjust if your tab has a different name
+const SHEET_NAME = "Sheet1";
 // Google Sheet: https://docs.google.com/spreadsheets/d/108CN5yesthvwP9eD3KiMwGa5Q1Aan43OZfS86FgFfnk/edit?gid=0#gid=0
 const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID || "108CN5yesthvwP9eD3KiMwGa5Q1Aan43OZfS86FgFfnk";
 
@@ -60,16 +50,46 @@ function getSheetsClient() {
   return google.sheets({ version: "v4", auth: getAuth() });
 }
 
+function hasValidGoogleCredentials(): boolean {
+  const email = (process.env.GOOGLE_CLIENT_EMAIL ?? "").trim();
+  const key = (process.env.GOOGLE_PRIVATE_KEY ?? "").trim();
+  if (!email || !key) return false;
+  if (
+    email.includes("your_service_account_email") ||
+    key.includes("YourPrivateKeyHere") ||
+    !key.includes("-----BEGIN PRIVATE KEY-----")
+  ) {
+    return false;
+  }
+  try {
+    const formattedKey = key.replace(/\\n/g, "\n");
+    createPrivateKey(formattedKey);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Convert a 1-based row index to an A1 range string for the full data row. */
-function rowRange(rowIndex: number): string {
-  return `${SHEET_NAME}!A${rowIndex}:F${rowIndex}`;
+/** Extract DD/MM/YYYY date from string like "09/09/2026 (Wed)" or "09/09/2026". */
+function extractDateString(str: string): string | null {
+  if (!str) return null;
+  const match = str.match(/(\d{1,2}\/\d{1,2}\/\d{4})/);
+  if (match) return match[1];
+  const isoMatch = str.match(/(\d{4}-\d{2}-\d{2})/);
+  if (isoMatch) return isoMatch[1];
+  return null;
+}
+
+/** Check if string is a time slot like "7:00pm - 7:40pm". */
+function isTimeSlotString(str: string): boolean {
+  if (!str) return false;
+  return /\d{1,2}:\d{2}\s*(?:am|pm)?\s*-\s*\d{1,2}:\d{2}\s*(?:am|pm)?/i.test(str);
 }
 
 /**
  * Returns midnight (00:00:00.000) of today in local server time.
- * Used for past-date filtering — slots strictly before this timestamp are excluded.
  */
 function getTodayMidnight(): Date {
   const now = new Date();
@@ -77,33 +97,20 @@ function getTodayMidnight(): Date {
 }
 
 /**
- * Parses a date string from the Google Sheet into a JS Date.
- * Handles the following formats:
- *   DD/MM/YYYY  — "04/09/2026"
- *   YYYY-MM-DD  — "2026-09-04"  (ISO)
- *   MM/DD/YYYY  — "09/04/2026"  (US — only attempted as last resort)
- *   "September 4, 2026"         (long)
- *   "4 Sep 2026"                (short)
- *   "Sep 4, 2026"               (short alt)
- * Returns null if the string cannot be reliably parsed.
+ * Parses a date string (DD/MM/YYYY) into a JS Date.
  */
 function parseDateFromSheet(dateStr: string): Date | null {
   if (!dateStr) return null;
-
-  // DD/MM/YYYY
   const dmyMatch = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (dmyMatch) {
     const d = parseInt(dmyMatch[1], 10);
     const m = parseInt(dmyMatch[2], 10) - 1;
     const y = parseInt(dmyMatch[3], 10);
     const dt = new Date(y, m, d);
-    // Validate: day must be <= 31, month <= 11
     if (dt.getFullYear() === y && dt.getMonth() === m && dt.getDate() === d) {
       return dt;
     }
   }
-
-  // YYYY-MM-DD (ISO without time)
   const isoMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (isoMatch) {
     const y = parseInt(isoMatch[1], 10);
@@ -114,58 +121,131 @@ function parseDateFromSheet(dateStr: string): Date | null {
       return dt;
     }
   }
-
-  // "Month D, YYYY" or "D Month YYYY" or "Month D YYYY"
   const loose = new Date(dateStr);
   if (!isNaN(loose.getTime())) {
-    // new Date() parses these as UTC midnight; convert to local
     return new Date(loose.getFullYear(), loose.getMonth(), loose.getDate());
   }
-
   return null;
 }
 
 /**
- * Returns true if the given date string represents a date strictly before today.
- * Dates that cannot be parsed are kept (shown) to avoid hiding real slots.
+ * Returns true if dateStr is strictly before today.
  */
 function isBeforeToday(dateStr: string): boolean {
   const parsed = parseDateFromSheet(dateStr);
-  if (!parsed) return false; // can't determine — don't hide
+  if (!parsed) return false;
   return parsed.getTime() < getTodayMidnight().getTime();
 }
 
-/** Fetch ALL rows (including header). Returns raw 2D array. */
+async function fetchRowsFromGviz(): Promise<string[][]> {
+  const url = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json`;
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch sheet via gviz: HTTP ${res.status}`);
+  }
+  const text = await res.text();
+  const jsonStr = text
+    .replace(/^\/\*O_o\*\/\s*google\.visualization\.Query\.setResponse\(/, "")
+    .replace(/\);?\s*$/, "");
+  const data = JSON.parse(jsonStr);
+  const rows: string[][] = [];
+
+  if (data.table?.cols) {
+    rows.push(data.table.cols.map((c: any) => c?.label || ""));
+  }
+
+  if (data.table?.rows) {
+    for (const r of data.table.rows) {
+      if (!r || !r.c) continue;
+      const rowVals = r.c.map((c: any) =>
+        c
+          ? c.f !== undefined && c.f !== null
+            ? String(c.f)
+            : c.v !== undefined && c.v !== null
+            ? String(c.v)
+            : ""
+          : ""
+      );
+      rows.push(rowVals);
+    }
+  }
+
+  return rows;
+}
+
+/** Fetch ALL rows (including headers & date blocks). Range A:H. */
 async function getAllRows(): Promise<string[][]> {
-  const sheets = getSheetsClient();
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:F`,
-  });
-  return (res.data.values ?? []) as string[][];
+  if (hasValidGoogleCredentials()) {
+    try {
+      const sheets = getSheetsClient();
+      const res = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${SHEET_NAME}!A:H`,
+      });
+      return (res.data.values ?? []) as string[][];
+    } catch (err) {
+      console.warn("[googleSheets] API fetch failed, falling back to gviz:", err);
+    }
+  }
+  return fetchRowsFromGviz();
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 /**
- * Returns all slots whose Status column is exactly "Available".
+ * Returns all slots whose candidate column (Col B) is empty / available.
+ * Handles both date block format (DAC'26 recruitment sheet) and flat table format.
  */
 export async function getAvailableSlots(): Promise<Slot[]> {
   const rows = await getAllRows();
   const slots: Slot[] = [];
 
-  for (let i = 1; i < rows.length; i++) {
+  let currentDate: string | null = null;
+
+  for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const status = (row[COL.STATUS] ?? "").trim();
-    if (status === "Available") {
-      const dateStr = (row[COL.DATE] ?? "").trim();
-      // ── Security: never surface past-date slots ──
-      if (isBeforeToday(dateStr)) continue;
-      slots.push({
-        date: dateStr,
-        time: (row[COL.TIME] ?? "").trim(),
-        rowIndex: i + 1,
-      });
+    const colA = (row[0] ?? "").trim();
+    if (!colA) continue;
+
+    const extractedDate = extractDateString(colA);
+
+    // Date Block Header check (e.g. "30/08/2026 (Sun)")
+    if (extractedDate && !isTimeSlotString(colA)) {
+      currentDate = extractedDate;
+      continue;
+    }
+
+    // Time Slot row inside Date Block (Col A = "7:00pm - 7:40pm")
+    if (currentDate && isTimeSlotString(colA)) {
+      const candidateCol = (row[1] ?? "").trim();
+      const isAvailable =
+        !candidateCol ||
+        candidateCol.toLowerCase() === "available" ||
+        candidateCol.toLowerCase() === "invite sent";
+
+      if (isAvailable) {
+        if (isBeforeToday(currentDate)) continue;
+        slots.push({
+          date: currentDate,
+          time: colA,
+          rowIndex: i + 1,
+        });
+      }
+      continue;
+    }
+
+    // Fallback: Flat Table row format (Col A = Date, Col B = Time, Col C = Status)
+    if (!currentDate && extractedDate && isTimeSlotString((row[1] ?? "").trim())) {
+      const statusStr = (row[2] ?? "").trim();
+      if (statusStr.toLowerCase() === "available") {
+        if (!isBeforeToday(extractedDate)) {
+          slots.push({
+            date: extractedDate,
+            time: (row[1] ?? "").trim(),
+            rowIndex: i + 1,
+          });
+        }
+      }
     }
   }
 
@@ -173,24 +253,59 @@ export async function getAvailableSlots(): Promise<Slot[]> {
 }
 
 /**
- * Returns all slots where Status === "Booked" (used by the cron job).
+ * Returns all slots where a student is booked.
  */
 export async function getAllBookedSlots(): Promise<BookedSlot[]> {
   const rows = await getAllRows();
   const slots: BookedSlot[] = [];
 
-  for (let i = 1; i < rows.length; i++) {
+  let currentDate: string | null = null;
+
+  for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
-    const status = (row[COL.STATUS] ?? "").trim();
-    if (status === "Booked") {
-      slots.push({
-        date: (row[COL.DATE] ?? "").trim(),
-        time: (row[COL.TIME] ?? "").trim(),
-        studentNumber: (row[COL.STUDENT_NUMBER] ?? "").trim(),
-        studentEmail: (row[COL.STUDENT_EMAIL] ?? "").trim(),
-        preferredName: (row[COL.PREFERRED_NAME] ?? "").trim(),
-        rowIndex: i + 1,
-      });
+    const colA = (row[0] ?? "").trim();
+    if (!colA) continue;
+
+    const extractedDate = extractDateString(colA);
+
+    if (extractedDate && !isTimeSlotString(colA)) {
+      currentDate = extractedDate;
+      continue;
+    }
+
+    if (currentDate && isTimeSlotString(colA)) {
+      const candidateCol = (row[1] ?? "").trim();
+      const isBooked =
+        candidateCol !== "" &&
+        candidateCol.toLowerCase() !== "available" &&
+        candidateCol.toLowerCase() !== "invite sent";
+
+      if (isBooked) {
+        slots.push({
+          date: currentDate,
+          time: colA,
+          studentNumber: candidateCol,
+          studentEmail: "",
+          preferredName: candidateCol,
+          rowIndex: i + 1,
+        });
+      }
+      continue;
+    }
+
+    // Fallback: Flat Table row format
+    if (!currentDate && extractedDate && isTimeSlotString((row[1] ?? "").trim())) {
+      const statusStr = (row[2] ?? "").trim();
+      if (statusStr.toLowerCase() === "booked") {
+        slots.push({
+          date: extractedDate,
+          time: (row[1] ?? "").trim(),
+          studentNumber: (row[3] ?? "").trim(),
+          studentEmail: (row[4] ?? "").trim(),
+          preferredName: (row[5] ?? "").trim(),
+          rowIndex: i + 1,
+        });
+      }
     }
   }
 
@@ -198,8 +313,7 @@ export async function getAllBookedSlots(): Promise<BookedSlot[]> {
 }
 
 /**
- * Books a slot. Performs a double-check read immediately before writing
- * to guard against race conditions.
+ * Books a slot by writing student details to Candidate Column (Col B).
  */
 export async function bookSlot(
   date: string,
@@ -208,28 +322,62 @@ export async function bookSlot(
   studentEmail: string,
   preferredName: string = ""
 ): Promise<void> {
-  // ── Security: reject bookings for past dates ──
   if (isBeforeToday(date)) {
     throw new Error("Cannot book a slot for a date in the past.");
   }
 
-  const sheets = getSheetsClient();
+  if (!hasValidGoogleCredentials()) {
+    throw new Error(
+      "Google Sheets API write credentials (GOOGLE_CLIENT_EMAIL and GOOGLE_PRIVATE_KEY) are missing or set to placeholders in .env.local."
+    );
+  }
 
+  const sheets = getSheetsClient();
   const rows = await getAllRows();
 
   let targetRowIndex: number | null = null;
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i];
-    const rowDate = (row[COL.DATE] ?? "").trim();
-    const rowTime = (row[COL.TIME] ?? "").trim();
-    const rowStatus = (row[COL.STATUS] ?? "").trim();
+  let isFlatFormat = false;
+  let currentDate: string | null = null;
 
-    if (rowDate === date && rowTime === time) {
-      if (rowStatus !== "Available") {
-        throw new SlotAlreadyBookedError(date, time);
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const colA = (row[0] ?? "").trim();
+    if (!colA) continue;
+
+    const extractedDate = extractDateString(colA);
+
+    if (extractedDate && !isTimeSlotString(colA)) {
+      currentDate = extractedDate;
+      continue;
+    }
+
+    if (currentDate && currentDate === date) {
+      if (colA === time) {
+        const candidateCol = (row[1] ?? "").trim();
+        const isAvailable =
+          !candidateCol ||
+          candidateCol.toLowerCase() === "available" ||
+          candidateCol.toLowerCase() === "invite sent";
+
+        if (!isAvailable) {
+          throw new SlotAlreadyBookedError(date, time);
+        }
+        targetRowIndex = i + 1;
+        break;
       }
-      targetRowIndex = i + 1;
-      break;
+    }
+
+    // Fallback: Flat format
+    if (!currentDate && extractedDate === date) {
+      if ((row[1] ?? "").trim() === time) {
+        const status = (row[2] ?? "").trim();
+        if (status.toLowerCase() !== "available") {
+          throw new SlotAlreadyBookedError(date, time);
+        }
+        targetRowIndex = i + 1;
+        isFlatFormat = true;
+        break;
+      }
     }
   }
 
@@ -237,31 +385,52 @@ export async function bookSlot(
     throw new Error(`Slot not found for date="${date}" time="${time}".`);
   }
 
-  // Double-check row status
+  // Double-check row before updating
   const checkRes = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
-    range: rowRange(targetRowIndex),
+    range: `${SHEET_NAME}!A${targetRowIndex}:C${targetRowIndex}`,
   });
   const checkRow = (checkRes.data.values?.[0] ?? []) as string[];
-  const currentStatus = (checkRow[COL.STATUS] ?? "").trim();
 
-  if (currentStatus !== "Available") {
-    throw new SlotAlreadyBookedError(date, time);
+  if (isFlatFormat) {
+    const currentStatus = (checkRow[2] ?? "").trim();
+    if (currentStatus.toLowerCase() !== "available") {
+      throw new SlotAlreadyBookedError(date, time);
+    }
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!A${targetRowIndex}:F${targetRowIndex}`,
+      valueInputOption: "RAW",
+      requestBody: {
+        values: [[date, time, "Booked", studentNumber, studentEmail, preferredName]],
+      },
+    });
+  } else {
+    const currentCandidate = (checkRow[1] ?? "").trim();
+    if (
+      currentCandidate &&
+      currentCandidate.toLowerCase() !== "available" &&
+      currentCandidate.toLowerCase() !== "invite sent"
+    ) {
+      throw new SlotAlreadyBookedError(date, time);
+    }
+
+    const nameToUse = preferredName.trim() || studentNumber;
+    const bookingValue = `${nameToUse} (${studentNumber})`;
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!B${targetRowIndex}`,
+      valueInputOption: "RAW",
+      requestBody: {
+        values: [[bookingValue]],
+      },
+    });
   }
-
-  // Write booking data including Preferred Name
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: SPREADSHEET_ID,
-    range: rowRange(targetRowIndex),
-    valueInputOption: "RAW",
-    requestBody: {
-      values: [[date, time, "Booked", studentNumber, studentEmail, preferredName]],
-    },
-  });
 }
 
 /**
- * Returns a student's active booking if they have one, or null.
+ * Returns a student's active booking if they have one.
  */
 export async function getStudentBooking(
   studentNumber: string
@@ -270,20 +439,47 @@ export async function getStudentBooking(
   if (!cleanNum) return null;
 
   const rows = await getAllRows();
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i];
-    const status = (row[COL.STATUS] ?? "").trim();
-    const stuNum = (row[COL.STUDENT_NUMBER] ?? "").trim().toLowerCase();
+  let currentDate: string | null = null;
 
-    if (status === "Booked" && stuNum === cleanNum) {
-      return {
-        date: (row[COL.DATE] ?? "").trim(),
-        time: (row[COL.TIME] ?? "").trim(),
-        studentNumber: (row[COL.STUDENT_NUMBER] ?? "").trim(),
-        studentEmail: (row[COL.STUDENT_EMAIL] ?? "").trim(),
-        preferredName: (row[COL.PREFERRED_NAME] ?? "").trim(),
-        rowIndex: i + 1,
-      };
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const colA = (row[0] ?? "").trim();
+    if (!colA) continue;
+
+    const extractedDate = extractDateString(colA);
+
+    if (extractedDate && !isTimeSlotString(colA)) {
+      currentDate = extractedDate;
+      continue;
+    }
+
+    if (currentDate && isTimeSlotString(colA)) {
+      const candidateCol = (row[1] ?? "").trim();
+      if (candidateCol.toLowerCase().includes(cleanNum)) {
+        return {
+          date: currentDate,
+          time: colA,
+          studentNumber: studentNumber,
+          studentEmail: "",
+          preferredName: candidateCol,
+          rowIndex: i + 1,
+        };
+      }
+    }
+
+    if (!currentDate && extractedDate) {
+      const status = (row[2] ?? "").trim();
+      const stuNum = (row[3] ?? "").trim().toLowerCase();
+      if (status.toLowerCase() === "booked" && stuNum === cleanNum) {
+        return {
+          date: extractedDate,
+          time: (row[1] ?? "").trim(),
+          studentNumber: (row[3] ?? "").trim(),
+          studentEmail: (row[4] ?? "").trim(),
+          preferredName: (row[5] ?? "").trim(),
+          rowIndex: i + 1,
+        };
+      }
     }
   }
 
@@ -291,7 +487,7 @@ export async function getStudentBooking(
 }
 
 /**
- * Cancels a student's active booking by setting Status back to "Available".
+ * Cancels a student's active booking.
  */
 export async function cancelSlot(
   studentNumber: string
@@ -302,14 +498,32 @@ export async function cancelSlot(
   }
 
   const sheets = getSheetsClient();
-  await sheets.spreadsheets.values.update({
+  const checkRes = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
-    range: rowRange(booking.rowIndex),
-    valueInputOption: "RAW",
-    requestBody: {
-      values: [[booking.date, booking.time, "Available", "", "", ""]],
-    },
+    range: `${SHEET_NAME}!A${booking.rowIndex}:C${booking.rowIndex}`,
   });
+  const row = (checkRes.data.values?.[0] ?? []) as string[];
+  const isFlat = (row[2] ?? "").trim().toLowerCase() === "booked";
+
+  if (isFlat) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!A${booking.rowIndex}:F${booking.rowIndex}`,
+      valueInputOption: "RAW",
+      requestBody: {
+        values: [[booking.date, booking.time, "Available", "", "", ""]],
+      },
+    });
+  } else {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `${SHEET_NAME}!B${booking.rowIndex}`,
+      valueInputOption: "RAW",
+      requestBody: {
+        values: [[""]],
+      },
+    });
+  }
 
   return booking;
 }
