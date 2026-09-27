@@ -81,8 +81,18 @@ export default function BookingModal({ slot, initialStudentNumber = "", onClose,
     setErrors({});
 
     try {
+      // 1. Auto-refresh/establish signed session cookie for this student number
+      await fetch("/api/auth/session", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentNumber: studentNumber.trim() }),
+      });
+
+      // 2. Submit booking request
       const res = await fetch("/api/slots/book", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           date: slot.date,
@@ -98,6 +108,10 @@ export default function BookingModal({ slot, initialStudentNumber = "", onClose,
       if (res.ok) {
         setBooked(true);
         onBooked(); // refresh the slot list in background
+      } else if (res.status === 401) {
+        setErrors({
+          global: data.message || "Session expired or invalid. Please log in again.",
+        });
       } else if (res.status === 409) {
         setErrors({
           global:
