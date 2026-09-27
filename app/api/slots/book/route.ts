@@ -110,19 +110,14 @@ export async function POST(req: NextRequest) {
     await bookSlot(cleanDate, cleanTime, cleanStudentNumber, cleanEmail, cleanPreferredName);
 
     // ── Send instant confirmation email ──
-    let emailSent = false;
     try {
-      const emailResult = await sendBookingConfirmationEmail(
+      await sendBookingConfirmationEmail(
         cleanEmail,
         cleanStudentNumber,
         cleanDate,
         cleanTime,
         cleanPreferredName
       );
-      emailSent = emailResult.success;
-      if (!emailSent) {
-        console.warn("[POST /api/slots/book] Confirmation email not sent:", emailResult.error);
-      }
     } catch (emailErr) {
       console.error("[POST /api/slots/book] Email trigger error:", emailErr);
     }
@@ -131,7 +126,6 @@ export async function POST(req: NextRequest) {
       {
         success: true,
         message: "Booking confirmed!",
-        emailSent,
         booking: {
           date: cleanDate,
           time: cleanTime,
@@ -143,7 +137,6 @@ export async function POST(req: NextRequest) {
       { status: 200 }
     );
   } catch (error) {
-    console.error("[POST /api/slots/book] Error caught:", error);
     if (error instanceof SlotAlreadyBookedError) {
       return NextResponse.json(
         {
@@ -156,7 +149,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const msg = error instanceof Error ? error.message : typeof error === "string" ? error : null;
+    // Past-date guard fired — return 422 Unprocessable
+    const msg = error instanceof Error ? error.message : null;
     if (msg === "Cannot book a slot for a date in the past.") {
       return NextResponse.json(
         { success: false, message: msg },
@@ -164,24 +158,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (msg?.includes("DECODER routines") || msg?.includes("unsupported")) {
-      return NextResponse.json(
-        {
-          success: false,
-          message:
-            "Invalid GOOGLE_PRIVATE_KEY in .env.local. Please ensure it is a valid RSA private key in PEM format (wrapped in quotes with \\n for line breaks).",
-        },
-        { status: 500 }
-      );
-    }
-
-    if (msg) {
-      return NextResponse.json(
-        { success: false, message: msg },
-        { status: 500 }
-      );
-    }
-
+    console.error("[POST /api/slots/book] Error:", error);
     return NextResponse.json(
       {
         success: false,

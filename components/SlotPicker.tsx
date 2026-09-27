@@ -54,38 +54,10 @@ export default function SlotPicker() {
   const [activeBooking, setActiveBooking] = useState<BookedSlot | null>(null);
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
 
-  // Sync session with server on mount
+  // Restore session from localStorage on mount
   useEffect(() => {
     const saved = localStorage.getItem(SESSION_STORAGE_KEY);
-    fetch("/api/auth/session", { cache: "no-store", credentials: "include" })
-      .then((res) => res.json())
-      .then(async (data) => {
-        if (data.authenticated && data.studentNumber) {
-          setStudentNumber(data.studentNumber);
-          localStorage.setItem(SESSION_STORAGE_KEY, data.studentNumber);
-        } else if (saved) {
-          // Cookie missing or expired: re-establish session for stored student number
-          try {
-            const reauth = await fetch("/api/auth/session", {
-              method: "POST",
-              credentials: "include",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ studentNumber: saved }),
-            });
-            if (reauth.ok) {
-              setStudentNumber(saved);
-            } else {
-              localStorage.removeItem(SESSION_STORAGE_KEY);
-              setStudentNumber("");
-            }
-          } catch {
-            setStudentNumber(saved);
-          }
-        }
-      })
-      .catch(() => {
-        if (saved) setStudentNumber(saved);
-      });
+    if (saved) setStudentNumber(saved);
   }, []);
 
   // Fetch student's existing booking whenever studentNumber changes
@@ -97,7 +69,7 @@ export default function SlotPicker() {
     try {
       const res = await fetch(
         `/api/student/booking?studentNumber=${encodeURIComponent(stuNum.trim())}`,
-        { cache: "no-store", credentials: "include" }
+        { cache: "no-store" }
       );
       if (res.ok) {
         const data = await res.json();
@@ -117,20 +89,16 @@ export default function SlotPicker() {
     try {
       const res = await fetch("/api/auth/session", {
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ studentNumber: id }),
       });
       if (!res.ok) {
-        const errText = await res.text();
-        console.error("[Login] Session API failed:", errText);
-        alert("Failed to log in: Server session could not be created. Please try again.");
-        return;
+        console.error("[Login] Session API failed:", await res.text());
+        // Don't block UX — still set the display state so the app works
+        // even if SESSION_SECRET isn't configured yet (dev fallback).
       }
     } catch (err) {
       console.error("[Login] Could not reach session API:", err);
-      alert("Could not connect to session server. Please check your network.");
-      return;
     }
     setStudentNumber(id);
     localStorage.setItem(SESSION_STORAGE_KEY, id);
@@ -139,7 +107,7 @@ export default function SlotPicker() {
   const handleLogout = async () => {
     // Clear the server-side session cookie
     try {
-      await fetch("/api/auth/session", { method: "DELETE", credentials: "include" });
+      await fetch("/api/auth/session", { method: "DELETE" });
     } catch (err) {
       console.error("[Logout] Could not reach session API:", err);
     }
@@ -152,7 +120,7 @@ export default function SlotPicker() {
     if (showLoading) setIsLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/slots", { cache: "no-store", credentials: "include" });
+      const res = await fetch("/api/slots", { cache: "no-store" });
       if (!res.ok) throw new Error(`Server error: ${res.status}`);
       const data = await res.json();
       setSlots(data.slots ?? []);
@@ -182,18 +150,8 @@ export default function SlotPicker() {
 
   const handleCancelBooking = async () => {
     if (!studentNumber) return;
-    try {
-      await fetch("/api/auth/session", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ studentNumber }),
-      });
-    } catch {}
-
     const res = await fetch("/api/slots/cancel", {
       method: "POST",
-      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ studentNumber }),
     });
